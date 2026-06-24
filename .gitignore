@@ -12,3 +12,6 @@ venv/
 .pytest_cache/
 .DS_Store
 /tmp/
+frontend/node_modules/
+frontend/dist/
+bugpilot.db
