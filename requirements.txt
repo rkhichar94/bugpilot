@@ -1,0 +1,13 @@
+anthropic>=0.25.0
+langgraph>=0.1.0
+langchain>=0.2.0
+langchain-anthropic>=0.1.0
+PyGithub>=2.3.0
+gitpython>=3.1.43
+qdrant-client>=1.9.0
+sentence-transformers>=3.0.0
+pydantic-settings>=2.2.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+langsmith>=0.1.0
+pytest>=8.0.0
