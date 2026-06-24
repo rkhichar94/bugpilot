@@ -1,252 +1,285 @@
-# Multi-Agent AI Bug Resolver
+<div align="center">
 
-## Overview
+<h1>🤖 BugPilot</h1>
 
-Multi-Agent AI Bug Resolver is an autonomous pipeline that fetches open bug tickets from Jira,
-uses Retrieval-Augmented Generation (RAG) to find similar past issues, generates code fixes by
-letting Claude explore and edit the repository via tool use, runs Maven tests to validate the
-fix, and opens a GitHub Pull Request for human approval — all orchestrated as a LangGraph state
-machine.
+<p><strong>Autonomous AI agent that reads Jira, writes code fixes, validates with tests, and opens PRs — zero humans in the loop until review.</strong></p>
+
+<p>
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/Claude-Sonnet_4.6-D97706?style=flat-square&logo=anthropic&logoColor=white" />
+  <img src="https://img.shields.io/badge/LangGraph-Orchestrated-6366F1?style=flat-square" />
+  <img src="https://img.shields.io/badge/RAG-Qdrant_+_Embeddings-10B981?style=flat-square" />
+  <img src="https://img.shields.io/badge/MCP-Atlassian_Remote-0052CC?style=flat-square&logo=atlassian&logoColor=white" />
+  <img src="https://img.shields.io/badge/PRs-Welcome-brightgreen?style=flat-square" />
+</p>
+
+</div>
+
+---
+
+## What it does
+
+BugPilot is a **multi-agent AI pipeline** that completely automates the bug-fix workflow from ticket to PR:
+
+1. **Reads** open Jira bugs via the Atlassian Remote MCP Server
+2. **Searches** a vector database for semantically similar past issues (RAG)
+3. **Generates** a code fix by giving Claude real filesystem access — it explores and patches the repo autonomously
+4. **Validates** the fix by running your Maven test suite
+5. **Opens** a GitHub PR with full context, retrying up to 3× if tests fail
+6. **Notifies** your team on Slack when a fix is ready for review
+
+```
+$ python main.py --issue PROJ-456
+
+============================================================
+Processing: PROJ-456 — NullPointerException in OrderService
+============================================================
+[issue_analyst] Embedding issue → 384-dim vector...
+[issue_analyst] Similar past issues found:
+  · PROJ-201 NullPointerException in CartService        (score: 0.91)
+  · PROJ-334 NPE when user has no active session        (score: 0.84)
+[fix_generator] Starting Claude tool-use loop for PROJ-456...
+[fix_generator] Tool call: list_files(['extension'])
+[fix_generator] Tool call: read_file(['src/main/java/OrderService.java'])
+[fix_generator] Tool call: write_file(['src/main/java/OrderService.java', ...])
+[fix_generator] Claude finished — end_turn reached
+[test_runner] Running mvn test (attempt 1)...
+[test_runner] Tests PASSED
+[pr_creator] Pushing branch fix/ai-PROJ-456...
+[pr_creator] PR created: https://github.com/org/repo/pull/42
+[pr_creator] Slack notification sent
+
+[main] Result: AWAITING_APPROVAL — https://github.com/org/repo/pull/42
+```
 
 ---
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    A([🐛 Jira Bug Issue]) --> B
+
+    subgraph LG[" LangGraph State Machine "]
+        B[1 · clone_repo\nGit clone · create fix branch]
+        B --> C[2 · issue_analyst\nEmbed · RAG similarity search]
+        C --> D[3 · fix_generator\nClaude tool-use loop]
+        D --> E[4 · test_runner\nmvn test via subprocess]
+        E --> F{Tests pass?}
+        F -- YES --> G[5 · pr_creator\nCommit · push · open PR]
+        F -- "NO · retry < 3" --> D
+        F -- "NO · retry ≥ 3" --> H([❌ END — escalate])
+    end
+
+    C <-.->|cosine similarity| Q[(Qdrant\nVector DB)]
+    D <-.->|tool-use loop| CL[Anthropic Claude\nread · write · list · search]
+    D <-.->|fetch context| MCP[Atlassian MCP\nRemote Server]
+    G --> PR([GitHub PR])
+    G --> SL([Slack Notify])
 ```
-                          ┌─────────────────────────────────────────────────┐
-                          │              LangGraph State Machine             │
-                          │                                                  │
-  Jira Bug Issue          │                                                  │
-  ──────────────►  [1. clone_repo]                                          │
-                          │       │                                          │
-                          │       ▼                                          │
-                          │  [2. issue_analyst]  ◄──► Qdrant Vector DB      │
-                          │       │               (embed + RAG similarity)   │
-                          │       ▼                                          │
-                          │  [3. fix_generator]  ◄──► Claude (tool-use loop)│
-                          │       │               read_file / write_file /   │
-                          │       │               list_files / search_files  │
-                          │       ▼                                          │
-                          │  [4. test_runner]  → mvn test (subprocess)      │
-                          │       │                                          │
-                          │    passed?                                       │
-                          │    ├── YES ──────► [5. pr_creator] ─► GitHub PR │
-                          │    │                                    │        │
-                          │    │                               Slack notify  │
-                          │    └── NO (retry < 3) ──► back to fix_generator │
-                          │                                                  │
-                          │    NO (retry ≥ 3) ──────────────────► END FAILED│
-                          └─────────────────────────────────────────────────┘
+
+> **[→ Interactive Architecture Diagram](https://claude.ai/code/artifact/f5c4e94a-5fd5-4932-a57d-ef7b2dfc4da8)** — click each stage to explore the implementation and interview talking points.
+
+---
+
+## Quick Start
+
+**Prerequisites:** Python 3.11+, Maven, Docker, an Anthropic API key, Atlassian OAuth token, GitHub token.
+
+```bash
+# 1. Clone and install
+git clone https://github.com/rkhichar94/bugpilot && cd bugpilot
+pip install -r requirements.txt
+
+# 2. Configure
+cp .env.example .env   # fill in ANTHROPIC_API_KEY, ATLASSIAN_MCP_TOKEN, GITHUB_TOKEN, REPO_URL
+
+# 3. Start Qdrant
+docker run -d -p 6333:6333 qdrant/qdrant
+
+# 4. Run
+python main.py --issue PROJ-123    # single issue
+python main.py                     # all open bugs matching your JQL filter
 ```
+
+---
+
+## How It Works — End to End
+
+**Input:** Jira ticket `PROJ-456` — *"NullPointerException in OrderService when cart is empty"*
+
+### 1 · `clone_repo`
+Clones the target repo into `/tmp/bug-resolver-workspace/PROJ-456/` and creates an isolated branch `fix/ai-PROJ-456`. Every issue gets its own branch — parallel processing, clean main, easy review.
+
+### 2 · `issue_analyst`
+Concatenates summary + description + stacktrace, embeds it into a **384-dimensional vector** using `all-MiniLM-L6-v2`, and runs a cosine similarity search against Qdrant. Returns the top-3 semantically closest past issues with their resolutions. The current issue is upserted so it feeds future lookups.
+
+```
+[PROJ-201] NullPointerException in CartService (score: 0.91)
+[PROJ-334] NPE when user has no active session  (score: 0.84)
+```
+
+### 3 · `fix_generator` ← the core
+Claude receives a system prompt with the bug report and similar issue resolutions, then enters an **agentic tool-use loop**:
+
+```python
+while stop_reason != "end_turn":
+    response = client.messages.create(tools=TOOL_DEFINITIONS, messages=messages)
+    for tool_call in response.tool_use_blocks:
+        result = TOOL_DISPATCH[tool_call.name](**tool_call.input)
+        messages.append(tool_result(tool_call.id, result))
+```
+
+Claude autonomously calls `list_files` → `read_file` → `read_file` → `write_file`, patches the null-check in `OrderService.java`, and signals `end_turn`. No guidance needed — it navigates like a developer.
+
+### 4 · `test_runner`
+Runs `mvn test -q` via subprocess. Parses `BUILD SUCCESS` / `BUILD FAILURE`. On failure, the exact failing test names and stack traces are injected back into Claude's context for the next attempt. Up to **3 retry cycles**.
+
+### 5 · `pr_creator`
+Stages changes, commits with a semantic message, pushes the branch, opens a GitHub PR with the fix description + test results + referenced past issues, and fires a Slack notification.
+
+---
+
+## AI & ML Concepts
+
+<details>
+<summary><strong>Retrieval-Augmented Generation (RAG)</strong></summary>
+
+Bug reports are embedded into a shared vector space using `all-MiniLM-L6-v2`. At query time, cosine similarity retrieves the top-3 most semantically similar past issues — even when keywords differ. *"Connection pool exhaustion"* matches *"too many open database handles"* because the embedding captures meaning. This grounds Claude in your team's real historical fixes rather than hallucinated guesses.
+
+</details>
+
+<details>
+<summary><strong>Multi-Agent Orchestration</strong></summary>
+
+The pipeline is decomposed into five single-responsibility agents: `clone_repo`, `issue_analyst`, `fix_generator`, `test_runner`, `pr_creator`. Each agent owns one concern and communicates only through a shared `AgentState` TypedDict. This separation means any agent can be replaced, tested in isolation, or scaled independently — a core property of production-grade agentic systems.
+
+</details>
+
+<details>
+<summary><strong>LangGraph State Machine</strong></summary>
+
+LangGraph models the pipeline as a directed graph with typed state. Conditional edges handle the retry loop declaratively:
+
+```python
+graph.add_conditional_edges("test_runner", route_after_tests, {
+    "fix_generator": "fix_generator",   # retry
+    "pr_creator": "pr_creator",          # success
+    END: END,                            # max retries
+})
+```
+
+No `if/else` in application code — the graph topology *is* the control flow.
+
+</details>
+
+<details>
+<summary><strong>Claude Tool-Use Loop</strong></summary>
+
+The fix generator uses the Anthropic Messages API with tool definitions for `read_file`, `write_file`, `list_files`, and `search_in_files`. Claude decides *which* tools to call, *in what order*, and *when to stop* — the application code only executes tool calls and feeds results back. This is the difference between a prompted LLM and a true agent.
+
+</details>
+
+<details>
+<summary><strong>Atlassian Remote MCP Server</strong></summary>
+
+Jira integration uses the Atlassian Remote MCP Server (`https://mcp.atlassian.com/v1/mcp`) via Anthropic's beta MCP client — no `python-jira` REST wrapper needed. Claude calls the Jira MCP tools directly with an OAuth token, receiving structured issue data as native tool results.
+
+</details>
 
 ---
 
 ## Tech Stack
 
-| Concern                | Library / Tool                              |
-|------------------------|---------------------------------------------|
-| Agent orchestration    | LangGraph + LangChain                       |
-| LLM                    | Anthropic Claude (`claude-sonnet-4-6`)      |
-| Vector DB              | Qdrant (local Docker container)             |
-| Embeddings             | `sentence-transformers` `all-MiniLM-L6-v2` |
-| Jira integration       | Atlassian Remote MCP Server + Anthropic SDK |
-| GitHub integration     | `PyGithub` + `GitPython`                    |
-| Test execution         | `subprocess` → `mvn test`                   |
-| Observability          | LangSmith (env-var gated)                   |
-| Config                 | `pydantic-settings` + `.env`                |
-| Entry point            | Plain Python CLI (`python main.py`)         |
-
----
-
-## AI Concepts Used
-
-**Retrieval-Augmented Generation (RAG)**
-Each bug report is embedded into a 384-dimensional vector using `all-MiniLM-L6-v2` and stored
-in Qdrant. When a new bug arrives, cosine similarity search surfaces the top-3 most similar
-past issues so Claude can reference known resolutions — grounding the fix in prior engineering
-knowledge rather than hallucination.
-
-**Multi-Agent Orchestration**
-The pipeline is split into four specialised agents (analyst, fix generator, test runner, PR
-creator), each with a single responsibility. Separating concerns means each agent can be
-tested, replaced, or scaled independently — a key property of production agentic systems.
-
-**LangGraph State Machine**
-LangGraph models the pipeline as a directed graph of nodes and edges over a shared
-`AgentState` TypedDict. Conditional edges implement the retry loop: if tests fail and the
-retry count is below the threshold, the graph routes back to the fix generator automatically
-without any imperative control flow in application code.
-
-**Claude Tool-Use Loop**
-The fix generator runs an agentic loop where Claude is given four tools (`read_file`,
-`write_file`, `list_files`, `search_in_files`). Claude autonomously decides which files to
-read, locates the bug, writes the patch, and signals completion via `end_turn` — the
-application code simply executes whatever tool calls Claude emits and feeds results back.
-
-**Vector Similarity Search**
-Qdrant stores issue embeddings with cosine distance. At query time the system finds semantically
-similar issues even when the exact keywords differ — for example "connection pool exhaustion"
-matches "too many open database handles" because the embedding space captures meaning, not
-surface form.
-
----
-
-## Setup
-
-### Prerequisites
-
-- Python 3.11+
-- Maven (`mvn`) on your `PATH`
-- Docker (for Qdrant)
-- An Atlassian OAuth access token (for the Remote MCP Server at `https://mcp.atlassian.com`)
-- A GitHub personal access token with `repo` scope
-- An Anthropic API key
-
-### Step-by-step
-
-```bash
-# 1. Clone this repository
-git clone https://github.com/yourusername/multi-agent-bug-resolver
-cd multi-agent-bug-resolver
-
-# 2. Create your .env file
-cp .env.example .env
-# Edit .env and fill in all required values
-
-# 3. Start Qdrant locally
-docker run -d -p 6333:6333 --name qdrant qdrant/qdrant
-
-# 4. Install Python dependencies
-pip install -r requirements.txt
-
-# 5. (Optional) Enable LangSmith tracing
-#    Set LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY in .env
-
-# 6. Run on all open bugs
-python main.py
-
-# 7. Or run on a single issue
-python main.py --issue PROJ-123
-```
-
----
-
-## How It Works
-
-Here is a walkthrough of one issue being processed end-to-end.
-
-**Input:** Jira ticket `PROJ-456` — *"NullPointerException in OrderService when cart is empty"*
-
-1. **clone_repo** — The repo is cloned into `/tmp/bug-resolver-workspace/PROJ-456/` and a
-   new branch `fix/ai-PROJ-456` is created.
-
-2. **issue_analyst** — The summary, description, and stacktrace are concatenated and embedded
-   into a 384-dim vector. Qdrant is searched for the 3 closest past issues. The current issue
-   is also upserted so future runs can reference it. Example result:
-   ```
-   [PROJ-201] NullPointerException in CartService (score: 0.91)
-   [PROJ-334] NPE when user has no active session (score: 0.84)
-   ```
-
-3. **fix_generator** — Claude receives a system prompt containing the bug report and similar
-   issue resolutions. It then autonomously:
-   - Calls `list_files(extension=".java")` to see the project structure
-   - Calls `read_file("src/main/java/OrderService.java")` to find the bug
-   - Calls `write_file(...)` with a null-check guard added before the empty-cart path
-   - Returns a text description: *"Added null check for `cart.getItems()` before iterating..."*
-
-4. **test_runner** — Runs `mvn test -q` via subprocess. If `BUILD SUCCESS` is detected, the
-   state moves forward. If `BUILD FAILURE`, `retry_count` increments and the graph loops back
-   to `fix_generator` with the failure output included in the next prompt.
-
-5. **pr_creator** — All changes are staged and committed as
-   `fix(ai): resolve PROJ-456 — NullPointerException in OrderService when cart`. The branch is
-   pushed and a GitHub PR is created with a body that includes the fix description, test
-   results, and referenced similar issues. If configured, a Slack message is sent with the PR
-   link.
+| Layer | Technology |
+|---|---|
+| Agent orchestration | [LangGraph](https://github.com/langchain-ai/langgraph) + LangChain |
+| LLM | Anthropic Claude `claude-sonnet-4-6` |
+| Vector store | [Qdrant](https://qdrant.tech/) (local Docker) |
+| Embeddings | `sentence-transformers` · `all-MiniLM-L6-v2` (384-dim) |
+| Jira integration | Atlassian Remote MCP Server + Anthropic beta SDK |
+| GitHub integration | `PyGithub` + `GitPython` |
+| Test execution | `subprocess` → `mvn test` |
+| Observability | LangSmith (env-var gated) |
+| Config | `pydantic-settings` + `.env` |
 
 ---
 
 ## Project Structure
 
 ```
-multi-agent-bug-resolver/
-├── main.py                      # CLI entry point
-├── config.py                    # pydantic-settings config
-├── .env.example                 # template env file
+bugpilot/
+├── main.py                  # CLI — single issue or batch JQL
+├── config.py                # pydantic-settings (all env vars)
+├── .env.example
 ├── requirements.txt
-├── README.md
 │
 ├── graph/
-│   └── orchestrator.py          # LangGraph StateGraph definition
+│   └── orchestrator.py      # LangGraph StateGraph + conditional edges
 │
 ├── agents/
-│   ├── __init__.py
-│   ├── issue_analyst.py         # Step 1: embed + RAG similarity search
-│   ├── fix_generator.py         # Step 2: Claude tool-use loop → patch
-│   ├── test_runner.py           # Step 3: mvn test via subprocess
-│   └── pr_creator.py            # Step 4: commit + push + open PR
+│   ├── issue_analyst.py     # embed + Qdrant RAG search
+│   ├── fix_generator.py     # Claude tool-use agentic loop
+│   ├── test_runner.py       # mvn test + output parsing
+│   └── pr_creator.py        # git commit + GitHub PR + Slack
 │
 ├── rag/
-│   ├── __init__.py
-│   ├── embedder.py              # sentence-transformers wrapper
-│   └── retriever.py             # Qdrant upsert + similarity search
+│   ├── embedder.py          # sentence-transformers wrapper
+│   └── retriever.py         # Qdrant upsert + similarity search
 │
 ├── tools/
-│   ├── __init__.py
-│   ├── repo_tools.py            # read_file, write_file, list_files, search_in_files
-│   └── jira_tools.py            # fetch_issue, update_issue_status
+│   ├── repo_tools.py        # read_file · write_file · list_files · search_in_files
+│   └── jira_tools.py        # Atlassian MCP client (fetch + search + comment)
 │
 └── tests/
     ├── test_embedder.py
     ├── test_repo_tools.py
-    └── test_graph.py            # mock-based graph flow tests
+    └── test_graph.py        # mock-based graph flow + routing tests
 ```
 
 ---
 
-## Running Tests
+## Tests
 
 ```bash
 pytest tests/ -v
 ```
 
-The test suite uses `unittest.mock` to stub all external calls (Qdrant, Claude, GitHub, Jira,
-Git) so tests run offline with no credentials required.
+All external calls (Qdrant, Claude, GitHub, Git) are stubbed with `unittest.mock`. The suite runs **fully offline** — no credentials required.
 
 ---
 
-## Environment Variables Reference
+## Environment Variables
 
-| Variable                | Required | Description                                     |
-|-------------------------|----------|-------------------------------------------------|
-| `ATLASSIAN_MCP_TOKEN`   | Yes      | Atlassian OAuth access token for the Remote MCP Server |
-| `JIRA_PROJECT_KEY`      | Yes      | e.g. `PROJ`                                     |
-| `JIRA_JQL_FILTER`       | No       | Defaults to `issuetype=Bug AND status=Open`     |
-| `GITHUB_TOKEN`          | Yes      | Personal access token with `repo` scope         |
-| `REPO_URL`              | Yes      | Full HTTPS URL of the target repository         |
-| `REPO_DEFAULT_BRANCH`   | No       | Defaults to `main`                              |
-| `ANTHROPIC_API_KEY`     | Yes      | Anthropic API key                               |
-| `CLAUDE_MODEL`          | No       | Defaults to `claude-sonnet-4-6`                 |
-| `QDRANT_URL`            | No       | Defaults to `http://localhost:6333`             |
-| `QDRANT_COLLECTION`     | No       | Defaults to `bug_issues`                        |
-| `LANGCHAIN_TRACING_V2`  | No       | Set `true` to enable LangSmith                  |
-| `LANGCHAIN_API_KEY`     | No       | Required if tracing is enabled                  |
-| `SLACK_WEBHOOK_URL`     | No       | Incoming webhook for PR notifications           |
-| `WORKSPACE_DIR`         | No       | Defaults to `/tmp/bug-resolver-workspace`       |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | ✅ | — | Anthropic API key |
+| `ATLASSIAN_MCP_TOKEN` | ✅ | — | Atlassian OAuth token for MCP server |
+| `JIRA_PROJECT_KEY` | ✅ | — | e.g. `PROJ` |
+| `GITHUB_TOKEN` | ✅ | — | Personal access token (`repo` scope) |
+| `REPO_URL` | ✅ | — | Full HTTPS URL of target repository |
+| `JIRA_JQL_FILTER` | ➖ | `issuetype=Bug AND status=Open` | JQL for batch mode |
+| `REPO_DEFAULT_BRANCH` | ➖ | `main` | Base branch for PRs |
+| `CLAUDE_MODEL` | ➖ | `claude-sonnet-4-6` | Override the Claude model |
+| `QDRANT_URL` | ➖ | `http://localhost:6333` | Qdrant instance URL |
+| `QDRANT_COLLECTION` | ➖ | `bug_issues` | Vector collection name |
+| `WORKSPACE_DIR` | ➖ | `/tmp/bug-resolver-workspace` | Clone directory |
+| `SLACK_WEBHOOK_URL` | ➖ | — | Incoming webhook for PR notifications |
+| `LANGCHAIN_TRACING_V2` | ➖ | `false` | Enable LangSmith tracing |
+| `LANGCHAIN_API_KEY` | ➖ | — | Required when tracing is on |
 
 ---
 
-## Future Enhancements
+## Roadmap
 
-- **Neo4j code graph** — Index the repository as a property graph (files → classes → methods →
-  calls) so the fix generator can navigate the call stack semantically rather than reading
-  files linearly.
-- **Multi-language support** — Abstract `test_runner` behind a strategy interface; add Gradle,
-  pytest, and npm test runners.
-- **Web UI** — A React dashboard showing pipeline status per issue, diff preview, and a
-  one-click approve/reject for each AI-generated PR.
-- **LLM judge** — Add a post-fix review step where a second Claude call evaluates the patch
-  for correctness, security, and style before tests are even run.
-- **Incremental embedding** — Sync the entire closed-issues history from Jira on first run to
-  pre-populate the Qdrant collection with a rich base of resolved bugs.
+- [ ] **Neo4j code graph** — Index the repo as `files → classes → methods → calls` so the fix generator can navigate call stacks semantically, not just linearly
+- [ ] **Multi-language** — Abstract `test_runner` behind a strategy interface; add Gradle, pytest, and npm runners
+- [ ] **LLM judge** — Post-fix second Claude call that evaluates the patch for correctness, security, and style before tests run
+- [ ] **Web UI** — React dashboard with live pipeline status, diff preview, and one-click approve/reject per PR
+- [ ] **Incremental embedding** — Sync full closed-issue history from Jira on first run to pre-populate Qdrant with a rich resolution base
+
+---
+
+<div align="center">
+<sub>Built with Anthropic Claude · LangGraph · Qdrant · Python 3.11</sub>
+</div>
