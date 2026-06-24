@@ -77,9 +77,6 @@ flowchart TD
     G --> PR([GitHub PR])
     G --> SL([Slack Notify])
 ```
-
-> **[→ Interactive Architecture Diagram](https://claude.ai/code/artifact/f5c4e94a-5fd5-4932-a57d-ef7b2dfc4da8)** — click each stage to explore the implementation and interview talking points.
-
 ---
 
 ## Quick Start
